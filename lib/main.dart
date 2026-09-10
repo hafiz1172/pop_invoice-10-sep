@@ -1,17 +1,22 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await appStore.initStorage();
   runApp(const PopInvoiceApp());
 }
 
 // ---------------- DATA MODELS ----------------
 class Product {
   final int id;
-  final String name;
-  final String icon;
-  final String category;
-  final double price;
+  String name;
+  String icon;
+  String category;
+  double price;
 
   Product({
     required this.id,
@@ -20,6 +25,22 @@ class Product {
     required this.category,
     required this.price,
   });
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'icon': icon,
+        'category': category,
+        'price': price,
+      };
+
+  factory Product.fromMap(Map<String, dynamic> map) => Product(
+        id: map['id'],
+        name: map['name'],
+        icon: map['icon'],
+        category: map['category'],
+        price: (map['price'] as num).toDouble(),
+      );
 }
 
 class InvoiceItem {
@@ -34,6 +55,18 @@ class InvoiceItem {
   });
 
   double get total => qty * rate;
+
+  Map<String, dynamic> toMap() => {
+        'product': product.toMap(),
+        'qty': qty,
+        'rate': rate,
+      };
+
+  factory InvoiceItem.fromMap(Map<String, dynamic> map) => InvoiceItem(
+        product: Product.fromMap(map['product']),
+        qty: (map['qty'] as num).toDouble(),
+        rate: (map['rate'] as num).toDouble(),
+      );
 }
 
 class Invoice {
@@ -49,6 +82,7 @@ class Invoice {
   final double previousDue;
   final double remaining;
   final String paymentMethod;
+  bool synced;
 
   Invoice({
     required this.invNumber,
@@ -63,9 +97,41 @@ class Invoice {
     required this.previousDue,
     required this.remaining,
     required this.paymentMethod,
+    this.synced = false,
   });
 
-  // 80mm / 32-Column Monospaced Receipt Generator using Shop Settings
+  Map<String, dynamic> toMap() => {
+        'invNumber': invNumber,
+        'date': date,
+        'customerName': customerName,
+        'customerPhone': customerPhone,
+        'items': items.map((i) => i.toMap()).toList(),
+        'subtotal': subtotal,
+        'discount': discount,
+        'grand': grand,
+        'paid': paid,
+        'previousDue': previousDue,
+        'remaining': remaining,
+        'paymentMethod': paymentMethod,
+        'synced': synced ? 1 : 0,
+      };
+
+  factory Invoice.fromMap(Map<String, dynamic> map) => Invoice(
+        invNumber: map['invNumber'],
+        date: map['date'],
+        customerName: map['customerName'],
+        customerPhone: map['customerPhone'] ?? '',
+        items: (map['items'] as List).map((i) => InvoiceItem.fromMap(i)).toList(),
+        subtotal: (map['subtotal'] as num).toDouble(),
+        discount: (map['discount'] as num).toDouble(),
+        grand: (map['grand'] as num).toDouble(),
+        paid: (map['paid'] as num).toDouble(),
+        previousDue: (map['previousDue'] as num).toDouble(),
+        remaining: (map['remaining'] as num).toDouble(),
+        paymentMethod: map['paymentMethod'],
+        synced: (map['synced'] ?? 0) == 1,
+      );
+
   String toThermalReceiptText(ShopSettings shop) {
     final sb = StringBuffer();
     const w = 32;
@@ -82,24 +148,14 @@ class Invoice {
       return left + (' ' * space) + right;
     }
 
-    // Dynamic Shop Info from Settings
     sb.writeln(center(shop.name.toUpperCase()));
-    if (shop.tagline.isNotEmpty) {
-      sb.writeln(center(shop.tagline));
-    }
-    if (shop.phone.isNotEmpty) {
-      sb.writeln(center('Ph: ${shop.phone}'));
-    }
-    if (shop.address.isNotEmpty) {
-      sb.writeln(center(shop.address));
-    }
-
+    if (shop.tagline.isNotEmpty) sb.writeln(center(shop.tagline));
+    if (shop.phone.isNotEmpty) sb.writeln(center('Ph: ${shop.phone}'));
+    if (shop.address.isNotEmpty) sb.writeln(center(shop.address));
     sb.writeln('-' * w);
-    sb.writeln(row('Bill: $invNumber', date.substring(0, 10)));
+    sb.writeln(row('Bill: $invNumber', date.length >= 10 ? date.substring(0, 10) : date));
     sb.writeln('Customer: $customerName');
-    if (customerPhone.isNotEmpty) {
-      sb.writeln('Phone: $customerPhone');
-    }
+    if (customerPhone.isNotEmpty) sb.writeln('Phone: $customerPhone');
     sb.writeln('=' * w);
     sb.writeln(row('ITEM [QTY x RATE]', 'TOTAL'));
     sb.writeln('-' * w);
@@ -115,17 +171,11 @@ class Invoice {
 
     sb.writeln('-' * w);
     sb.writeln(row('Subtotal:', 'Rs. ${subtotal.toStringAsFixed(0)}'));
-    if (discount > 0) {
-      sb.writeln(row('Discount:', '-Rs. ${discount.toStringAsFixed(0)}'));
-    }
-    if (previousDue > 0) {
-      sb.writeln(row('Prev Due:', 'Rs. ${previousDue.toStringAsFixed(0)}'));
-    }
+    if (discount > 0) sb.writeln(row('Discount:', '-Rs. ${discount.toStringAsFixed(0)}'));
+    if (previousDue > 0) sb.writeln(row('Prev Due:', 'Rs. ${previousDue.toStringAsFixed(0)}'));
     sb.writeln(row('Net Payable:', 'Rs. ${(grand + previousDue).toStringAsFixed(0)}'));
     sb.writeln(row('Paid Cash:', 'Rs. ${paid.toStringAsFixed(0)}'));
-    if (remaining > 0) {
-      sb.writeln(row('Remaining Udhar:', 'Rs. ${remaining.toStringAsFixed(0)}'));
-    }
+    if (remaining > 0) sb.writeln(row('Remaining Udhar:', 'Rs. ${remaining.toStringAsFixed(0)}'));
     sb.writeln('=' * w);
     sb.writeln(center('THANK YOU FOR YOUR VISIT!'));
     sb.writeln(center('Software by POP Invoice'));
@@ -147,6 +197,20 @@ class Customer {
     required this.phone,
     required this.balance,
   });
+
+  Map<String, dynamic> toMap() => {
+        'key': key,
+        'name': name,
+        'phone': phone,
+        'balance': balance,
+      };
+
+  factory Customer.fromMap(Map<String, dynamic> map) => Customer(
+        key: map['key'],
+        name: map['name'],
+        phone: map['phone'] ?? '',
+        balance: (map['balance'] as num).toDouble(),
+      );
 }
 
 class ShopSettings {
@@ -154,50 +218,129 @@ class ShopSettings {
   String tagline;
   String phone;
   String address;
+  String syncUrl;
 
   ShopSettings({
     this.name = 'POP WORKSHOP',
     this.tagline = 'Plaster & False Ceiling Works',
     this.phone = '0300-1234567',
     this.address = 'Main Workshop Market',
+    this.syncUrl = '',
   });
+
+  Map<String, dynamic> toMap() => {
+        'name': name,
+        'tagline': tagline,
+        'phone': phone,
+        'address': address,
+        'syncUrl': syncUrl,
+      };
+
+  factory ShopSettings.fromMap(Map<String, dynamic> map) => ShopSettings(
+        name: map['name'] ?? 'POP WORKSHOP',
+        tagline: map['tagline'] ?? '',
+        phone: map['phone'] ?? '',
+        address: map['address'] ?? '',
+        syncUrl: map['syncUrl'] ?? '',
+      );
 }
 
-// ---------------- STATE STORE ----------------
+// ---------------- PERMANENT PERSISTENT STORE ----------------
 class WorkshopStore extends ChangeNotifier {
   ShopSettings shopSettings = ShopSettings();
-
-  List<Product> products = [
-    Product(id: 1, name: '2x2 Plain Tile', icon: '⬜', category: 'Tiles', price: 120.0),
-    Product(id: 2, name: '2x2 Design Tile', icon: '✨', category: 'Tiles', price: 140.0),
-    Product(id: 3, name: 'POP Bag (Special)', icon: '🧱', category: 'Plaster Bags', price: 550.0),
-    Product(id: 4, name: 'POP Bag (Standard)', icon: '📦', category: 'Plaster Bags', price: 480.0),
-    Product(id: 5, name: 'Ceiling Patti (G.I)', icon: '📏', category: 'Design', price: 90.0),
-    Product(id: 6, name: 'Jali Roll', icon: '🕸️', category: 'Others', price: 850.0),
-    Product(id: 7, name: 'Corner Rose', icon: '🌸', category: 'Design', price: 250.0),
-  ];
-
+  List<Product> products = [];
   List<Invoice> invoices = [];
   Map<String, Customer> customers = {};
+  bool isSyncing = false;
+
+  SharedPreferences? _prefs;
+
+  Future<void> initStorage() async {
+    _prefs = await SharedPreferences.getInstance();
+
+    final settingsStr = _prefs?.getString('shop_settings');
+    if (settingsStr != null) {
+      shopSettings = ShopSettings.fromMap(jsonDecode(settingsStr));
+    }
+
+    // Products: clean slate (no default preloaded items)
+    final productsStr = _prefs?.getString('products_list');
+    if (productsStr != null) {
+      final List decoded = jsonDecode(productsStr);
+      products = decoded.map((m) => Product.fromMap(m)).toList();
+    } else {
+      products = [];
+    }
+
+    final invoicesStr = _prefs?.getString('invoices_list');
+    if (invoicesStr != null) {
+      final List decoded = jsonDecode(invoicesStr);
+      invoices = decoded.map((m) => Invoice.fromMap(m)).toList();
+    }
+
+    final customersStr = _prefs?.getString('customers_map');
+    if (customersStr != null) {
+      final Map<String, dynamic> decoded = jsonDecode(customersStr);
+      customers = decoded.map((k, v) => MapEntry(k, Customer.fromMap(v)));
+    }
+  }
+
+  void _saveProducts() {
+    _prefs?.setString('products_list', jsonEncode(products.map((p) => p.toMap()).toList()));
+  }
+
+  void _saveInvoices() {
+    _prefs?.setString('invoices_list', jsonEncode(invoices.map((i) => i.toMap()).toList()));
+  }
+
+  void _saveCustomers() {
+    _prefs?.setString('customers_map', jsonEncode(customers.map((k, v) => MapEntry(k, v.toMap()))));
+  }
 
   String getNextInvoiceNumber() {
     int next = invoices.length + 1;
     return 'INV-${next.toString().padLeft(6, '0')}';
   }
 
-  void updateShopSettings({required String name, required String tagline, required String phone, required String address}) {
-    shopSettings = ShopSettings(name: name, tagline: tagline, phone: phone, address: address);
+  void updateShopSettings({
+    required String name,
+    required String tagline,
+    required String phone,
+    required String address,
+    required String syncUrl,
+  }) {
+    shopSettings = ShopSettings(name: name, tagline: tagline, phone: phone, address: address, syncUrl: syncUrl);
+    _prefs?.setString('shop_settings', jsonEncode(shopSettings.toMap()));
     notifyListeners();
   }
 
   void addProduct(String name, String icon, String category, double price) {
     products.add(Product(
-      id: products.length + 1,
+      id: DateTime.now().millisecondsSinceEpoch,
       name: name,
       icon: icon,
       category: category,
       price: price,
     ));
+    _saveProducts();
+    notifyListeners();
+  }
+
+  void editProduct(int id, String newName, String newIcon, String newCategory, double newPrice) {
+    final idx = products.indexWhere((p) => p.id == id);
+    if (idx != -1) {
+      products[idx].name = newName;
+      products[idx].icon = newIcon;
+      products[idx].category = newCategory;
+      products[idx].price = newPrice;
+      _saveProducts();
+      notifyListeners();
+    }
+  }
+
+  void deleteProduct(int id) {
+    products.removeWhere((p) => p.id == id);
+    _saveProducts();
     notifyListeners();
   }
 
@@ -209,30 +352,87 @@ class WorkshopStore extends ChangeNotifier {
         customers[key] = Customer(key: key, name: inv.customerName, phone: inv.customerPhone, balance: 0);
       }
       customers[key]!.balance += inv.remaining;
+      _saveCustomers();
     }
+    _saveInvoices();
     notifyListeners();
+
+    // Trigger background sync if URL is set
+    syncPendingInvoices();
+  }
+
+  Future<int> syncPendingInvoices() async {
+    if (shopSettings.syncUrl.isEmpty) return 0;
+    isSyncing = true;
+    notifyListeners();
+
+    int count = 0;
+    final url = Uri.parse(shopSettings.syncUrl);
+
+    for (var inv in invoices.where((i) => !i.synced)) {
+      try {
+        final payload = {
+          'action': 'save_invoice',
+          'invNumber': inv.invNumber,
+          'date': inv.date,
+          'customerName': inv.customerName,
+          'customerPhone': inv.customerPhone,
+          'subtotal': inv.subtotal,
+          'discount': inv.discount,
+          'grand': inv.grand,
+          'paid': inv.paid,
+          'previousDue': inv.previousDue,
+          'remaining': inv.remaining,
+          'paymentMethod': inv.paymentMethod,
+          'receiptText': inv.toThermalReceiptText(shopSettings),
+          'items': inv.items.map((i) => {
+                'name': i.product.name,
+                'qty': i.qty,
+                'rate': i.rate,
+                'total': i.total,
+              }).toList(),
+        };
+
+        final resp = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        );
+
+        if (resp.statusCode == 200) {
+          inv.synced = true;
+          count++;
+        }
+      } catch (_) {
+        // Network offline or endpoint error; remains synced = false
+      }
+    }
+
+    _saveInvoices();
+    isSyncing = false;
+    notifyListeners();
+    return count;
   }
 
   void recordPayment(String key, double amount) {
     if (customers.containsKey(key)) {
       customers[key]!.balance -= amount;
       if (customers[key]!.balance < 0) customers[key]!.balance = 0;
+      _saveCustomers();
       notifyListeners();
     }
   }
 
+  int get pendingSyncCount => invoices.where((i) => !i.synced).length;
+
   double get todayCashSales {
     final today = DateTime.now().toString().substring(0, 10);
-    return invoices
-        .where((i) => i.date.startsWith(today))
-        .fold(0.0, (sum, i) => sum + i.paid);
+    return invoices.where((i) => i.date.startsWith(today)).fold(0.0, (sum, i) => sum + i.paid);
   }
 
   double get todayCreditSales {
     final today = DateTime.now().toString().substring(0, 10);
-    return invoices
-        .where((i) => i.date.startsWith(today))
-        .fold(0.0, (sum, i) => sum + i.remaining);
+    return invoices.where((i) => i.date.startsWith(today)).fold(0.0, (sum, i) => sum + i.remaining);
   }
 }
 
@@ -284,6 +484,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final today = DateTime.now().toString().substring(0, 10);
     final todayCount = appStore.invoices.where((i) => i.date.startsWith(today)).length;
+    final pendingSync = appStore.pendingSyncCount;
 
     return Scaffold(
       appBar: AppBar(
@@ -291,6 +492,30 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: const Color(0xFF1565C0),
         foregroundColor: Colors.white,
         actions: [
+          if (appStore.shopSettings.syncUrl.isNotEmpty)
+            IconButton(
+              icon: appStore.isSyncing
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : Badge(
+                      label: Text('$pendingSync'),
+                      isLabelVisible: pendingSync > 0,
+                      child: const Icon(Icons.cloud_sync),
+                    ),
+              tooltip: 'Sync with Google Drive/Sheets',
+              onPressed: appStore.isSyncing
+                  ? null
+                  : () async {
+                      int count = await appStore.syncPendingInvoices();
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(count > 0 ? '$count bills synced successfully!' : 'No new bills to sync or offline.'),
+                            backgroundColor: count > 0 ? Colors.green : Colors.grey.shade800,
+                          ),
+                        );
+                      }
+                    },
+            ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Shop Settings',
@@ -359,7 +584,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   _bigNavCard(
                     title: 'Products',
-                    subtitle: 'Manage Items',
+                    subtitle: 'Add / Edit Items',
                     icon: Icons.category,
                     color: Colors.indigo,
                     onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ProductCatalogScreen())),
@@ -449,6 +674,13 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
   double get remainingDue => (totalPayable - paidAmount) > 0 ? (totalPayable - paidAmount) : 0.0;
 
   void _openProductPicker() {
+    if (appStore.products.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Catalog is empty! Add products first from the Products screen.')),
+      );
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -489,7 +721,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
                           Text(p.icon, style: const TextStyle(fontSize: 32)),
                           const SizedBox(height: 4),
                           Text(p.name, textAlign: TextAlign.center, maxLines: 1, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                          Text('Rs. ${p.price}', style: const TextStyle(color: Colors.black54, fontSize: 12)),
+                          Text('Rs. ${p.price.toStringAsFixed(0)}', style: const TextStyle(color: Colors.black54, fontSize: 12)),
                         ],
                       ),
                     ),
@@ -515,7 +747,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
             Text('Invoice Saved!'),
           ],
         ),
-        content: Text('${inv.invNumber} generated for ${inv.customerName}.\nDo you want to send it to printer now?'),
+        content: Text('${inv.invNumber} saved for ${inv.customerName}.\nPrint thermal receipt?'),
         actions: [
           TextButton(
             onPressed: () {
@@ -622,6 +854,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
               alignment: Alignment.center,
               child: const Text('No items added. Tap "+ Add Item" above.'),
             ),
+
+          // LIST OF ITEMS WITH DELETE BUTTON
           ...selectedItems.asMap().entries.map((entry) {
             int idx = entry.key;
             var item = entry.value;
@@ -658,7 +892,8 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.delete, color: Colors.red),
+                      tooltip: 'Remove Item',
+                      icon: const Icon(Icons.delete_outline, color: Colors.red),
                       onPressed: () => setState(() => selectedItems.removeAt(idx)),
                     ),
                   ],
@@ -666,6 +901,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
               ),
             );
           }),
+
           const SizedBox(height: 12),
           Card(
             color: Colors.blue.shade50,
@@ -846,6 +1082,10 @@ class InvoiceHistoryScreen extends StatelessWidget {
                 return Card(
                   color: Colors.white,
                   child: ListTile(
+                    leading: Icon(
+                      inv.synced ? Icons.cloud_done : Icons.cloud_off,
+                      color: inv.synced ? Colors.blue : Colors.grey,
+                    ),
                     title: Text('${inv.invNumber} — ${inv.customerName}', style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text('${inv.date} | Total: Rs. ${inv.grand.toStringAsFixed(0)}'),
                     trailing: IconButton(
@@ -863,7 +1103,7 @@ class InvoiceHistoryScreen extends StatelessWidget {
   }
 }
 
-// ---------------- 5. PRODUCT CATALOG SCREEN ----------------
+// ---------------- 5. PRODUCT CATALOG (ADD, EDIT, DELETE) ----------------
 class ProductCatalogScreen extends StatefulWidget {
   const ProductCatalogScreen({super.key});
 
@@ -872,25 +1112,25 @@ class ProductCatalogScreen extends StatefulWidget {
 }
 
 class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
-  void _addNewProductDialog() {
-    final nameCtrl = TextEditingController();
-    final priceCtrl = TextEditingController();
-    String selectedIcon = '🧱';
-    String selectedCategory = 'Tiles';
+  final emojis = ['🧱', '⬜', '✨', '📦', '📏', '🕸️', '🌸', '🔨', '⭐', '🛠️', '🪚'];
 
-    final emojis = ['🧱', '⬜', '✨', '📦', '📏', '🕸️', '🌸', '🔨', '⭐'];
+  void _showProductDialog({Product? existing}) {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final priceCtrl = TextEditingController(text: existing != null ? existing.price.toStringAsFixed(0) : '');
+    String selectedIcon = existing?.icon ?? '🧱';
+    String selectedCategory = existing?.category ?? 'Tiles';
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setDState) => AlertDialog(
-          title: const Text('Add New POP Item'),
+          title: Text(existing == null ? 'Add New Product' : 'Edit Product Rate / Name'),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Item Name (e.g. 2x2 Fancy)')),
-                TextField(controller: priceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Default Rate (Rs)')),
+                TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Item Name (e.g. 2x2 Plain)')),
+                TextField(controller: priceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Rate (Rs)')),
                 const SizedBox(height: 12),
                 const Text('Pick Icon:', style: TextStyle(fontWeight: FontWeight.bold)),
                 Wrap(
@@ -911,17 +1151,17 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
             ElevatedButton(
               onPressed: () {
                 if (nameCtrl.text.isNotEmpty) {
-                  appStore.addProduct(
-                    nameCtrl.text,
-                    selectedIcon,
-                    selectedCategory,
-                    double.tryParse(priceCtrl.text) ?? 0.0,
-                  );
+                  final price = double.tryParse(priceCtrl.text) ?? 0.0;
+                  if (existing == null) {
+                    appStore.addProduct(nameCtrl.text, selectedIcon, selectedCategory, price);
+                  } else {
+                    appStore.editProduct(existing.id, nameCtrl.text, selectedIcon, selectedCategory, price);
+                  }
                   Navigator.pop(ctx);
                   setState(() {});
                 }
               },
-              child: const Text('Save Item'),
+              child: const Text('Save'),
             ),
           ],
         ),
@@ -942,24 +1182,65 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text('New Item'),
-        onPressed: _addNewProductDialog,
+        onPressed: () => _showProductDialog(),
       ),
-      body: ListView.builder(
-        padding: const EdgeInsets.all(12),
-        itemCount: appStore.products.length,
-        itemBuilder: (context, idx) {
-          final p = appStore.products[idx];
-          return Card(
-            color: Colors.white,
-            child: ListTile(
-              leading: Text(p.icon, style: const TextStyle(fontSize: 26)),
-              title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text(p.category),
-              trailing: Text('Rs. ${p.price.toStringAsFixed(0)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+      body: appStore.products.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24.0),
+                child: Text('No products in catalog yet.\nTap "+ New Item" button below to add your workshop items.', textAlign: TextAlign.center),
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: appStore.products.length,
+              itemBuilder: (context, idx) {
+                final p = appStore.products[idx];
+                return Card(
+                  color: Colors.white,
+                  child: ListTile(
+                    leading: Text(p.icon, style: const TextStyle(fontSize: 26)),
+                    title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('Rate: Rs. ${p.price.toStringAsFixed(0)}'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.edit, color: Colors.blue),
+                          tooltip: 'Edit Rate / Name',
+                          onPressed: () => _showProductDialog(existing: p),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete, color: Colors.red),
+                          tooltip: 'Delete Item',
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Delete Product?'),
+                                content: Text('Remove "${p.name}" from catalog?'),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                                    onPressed: () {
+                                      appStore.deleteProduct(p.id);
+                                      Navigator.pop(ctx);
+                                      setState(() {});
+                                    },
+                                    child: const Text('Delete'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
-          );
-        },
-      ),
     );
   }
 }
@@ -977,6 +1258,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _taglineCtrl;
   late TextEditingController _phoneCtrl;
   late TextEditingController _addressCtrl;
+  late TextEditingController _syncUrlCtrl;
 
   @override
   void initState() {
@@ -986,13 +1268,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _taglineCtrl = TextEditingController(text: s.tagline);
     _phoneCtrl = TextEditingController(text: s.phone);
     _addressCtrl = TextEditingController(text: s.address);
+    _syncUrlCtrl = TextEditingController(text: s.syncUrl);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Workshop / Receipt Settings'),
+        title: const Text('Workshop & Cloud Settings'),
         backgroundColor: const Color(0xFF1565C0),
         foregroundColor: Colors.white,
       ),
@@ -1008,42 +1291,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text('Receipt Header Details', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 6),
-                  Text('Ye details har 80mm thermal receipt ke top par print hongi.', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
-                  const Divider(height: 24),
+                  const Divider(height: 20),
                   TextField(
                     controller: _nameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Workshop / Shop Name',
-                      prefixIcon: Icon(Icons.store),
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: const InputDecoration(labelText: 'Shop Name', prefixIcon: Icon(Icons.store), border: OutlineInputBorder()),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _taglineCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Sub-heading / Tagline',
-                      prefixIcon: Icon(Icons.subtitles),
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: const InputDecoration(labelText: 'Tagline', prefixIcon: Icon(Icons.subtitles), border: OutlineInputBorder()),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _phoneCtrl,
                     keyboardType: TextInputType.phone,
-                    decoration: const InputDecoration(
-                      labelText: 'Contact Phone Number',
-                      prefixIcon: Icon(Icons.phone),
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: const InputDecoration(labelText: 'Phone', prefixIcon: Icon(Icons.phone), border: OutlineInputBorder()),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _addressCtrl,
+                    decoration: const InputDecoration(labelText: 'Address', prefixIcon: Icon(Icons.location_on), border: OutlineInputBorder()),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Card(
+            color: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Google Drive & Sheets Sync', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text('Google Apps Script Web App URL yahan paste karein. Har invoice bante hi Drive aur Sheet dono me save ho jayegi.',
+                      style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                  const Divider(height: 20),
+                  TextField(
+                    controller: _syncUrlCtrl,
                     decoration: const InputDecoration(
-                      labelText: 'Workshop Address / Market',
-                      prefixIcon: Icon(Icons.location_on),
+                      labelText: 'Web App URL (https://script.google.com/...)',
+                      prefixIcon: Icon(Icons.cloud_upload),
                       border: OutlineInputBorder(),
                     ),
                   ),
@@ -1067,10 +1358,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 tagline: _taglineCtrl.text.trim(),
                 phone: _phoneCtrl.text.trim(),
                 address: _addressCtrl.text.trim(),
+                syncUrl: _syncUrlCtrl.text.trim(),
               );
               Navigator.pop(context);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Shop settings updated!'), backgroundColor: Colors.green),
+                const SnackBar(content: Text('Settings saved successfully!'), backgroundColor: Colors.green),
               );
             },
           ),
@@ -1079,5 +1371,3 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
-
-                            
