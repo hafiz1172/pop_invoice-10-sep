@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 void main() {
   runApp(const PopInvoiceApp());
@@ -63,6 +64,75 @@ class Invoice {
     required this.remaining,
     required this.paymentMethod,
   });
+
+  // 80mm / 32-Column Monospaced Receipt Generator using Shop Settings
+  String toThermalReceiptText(ShopSettings shop) {
+    final sb = StringBuffer();
+    const w = 32;
+
+    String center(String text) {
+      if (text.length >= w) return text.substring(0, w);
+      int left = (w - text.length) ~/ 2;
+      return ' ' * left + text;
+    }
+
+    String row(String left, String right) {
+      int space = w - left.length - right.length;
+      if (space < 1) space = 1;
+      return left + (' ' * space) + right;
+    }
+
+    // Dynamic Shop Info from Settings
+    sb.writeln(center(shop.name.toUpperCase()));
+    if (shop.tagline.isNotEmpty) {
+      sb.writeln(center(shop.tagline));
+    }
+    if (shop.phone.isNotEmpty) {
+      sb.writeln(center('Ph: ${shop.phone}'));
+    }
+    if (shop.address.isNotEmpty) {
+      sb.writeln(center(shop.address));
+    }
+
+    sb.writeln('-' * w);
+    sb.writeln(row('Bill: $invNumber', date.substring(0, 10)));
+    sb.writeln('Customer: $customerName');
+    if (customerPhone.isNotEmpty) {
+      sb.writeln('Phone: $customerPhone');
+    }
+    sb.writeln('=' * w);
+    sb.writeln(row('ITEM [QTY x RATE]', 'TOTAL'));
+    sb.writeln('-' * w);
+
+    for (var item in items) {
+      String itemName = item.product.name;
+      if (itemName.length > 20) itemName = itemName.substring(0, 20);
+      sb.writeln(itemName);
+      String qtyRate = ' ${item.qty.toStringAsFixed(0)} x ${item.rate.toStringAsFixed(0)}';
+      String lineTotal = 'Rs.${item.total.toStringAsFixed(0)}';
+      sb.writeln(row(qtyRate, lineTotal));
+    }
+
+    sb.writeln('-' * w);
+    sb.writeln(row('Subtotal:', 'Rs. ${subtotal.toStringAsFixed(0)}'));
+    if (discount > 0) {
+      sb.writeln(row('Discount:', '-Rs. ${discount.toStringAsFixed(0)}'));
+    }
+    if (previousDue > 0) {
+      sb.writeln(row('Prev Due:', 'Rs. ${previousDue.toStringAsFixed(0)}'));
+    }
+    sb.writeln(row('Net Payable:', 'Rs. ${(grand + previousDue).toStringAsFixed(0)}'));
+    sb.writeln(row('Paid Cash:', 'Rs. ${paid.toStringAsFixed(0)}'));
+    if (remaining > 0) {
+      sb.writeln(row('Remaining Udhar:', 'Rs. ${remaining.toStringAsFixed(0)}'));
+    }
+    sb.writeln('=' * w);
+    sb.writeln(center('THANK YOU FOR YOUR VISIT!'));
+    sb.writeln(center('Software by POP Invoice'));
+    sb.writeln('\n\n');
+
+    return sb.toString();
+  }
 }
 
 class Customer {
@@ -79,8 +149,24 @@ class Customer {
   });
 }
 
+class ShopSettings {
+  String name;
+  String tagline;
+  String phone;
+  String address;
+
+  ShopSettings({
+    this.name = 'POP WORKSHOP',
+    this.tagline = 'Plaster & False Ceiling Works',
+    this.phone = '0300-1234567',
+    this.address = 'Main Workshop Market',
+  });
+}
+
 // ---------------- STATE STORE ----------------
 class WorkshopStore extends ChangeNotifier {
+  ShopSettings shopSettings = ShopSettings();
+
   List<Product> products = [
     Product(id: 1, name: '2x2 Plain Tile', icon: '⬜', category: 'Tiles', price: 120.0),
     Product(id: 2, name: '2x2 Design Tile', icon: '✨', category: 'Tiles', price: 140.0),
@@ -97,6 +183,11 @@ class WorkshopStore extends ChangeNotifier {
   String getNextInvoiceNumber() {
     int next = invoices.length + 1;
     return 'INV-${next.toString().padLeft(6, '0')}';
+  }
+
+  void updateShopSettings({required String name, required String tagline, required String phone, required String address}) {
+    shopSettings = ShopSettings(name: name, tagline: tagline, phone: phone, address: address);
+    notifyListeners();
   }
 
   void addProduct(String name, String icon, String category, double price) {
@@ -196,9 +287,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('POP Workshop Invoice', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: Text(appStore.shopSettings.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
         backgroundColor: const Color(0xFF1565C0),
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Shop Settings',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen())),
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -240,7 +338,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   _bigNavCard(
                     title: 'New Bill',
-                    subtitle: 'Create Invoice',
+                    subtitle: 'Create & Print',
                     icon: Icons.receipt_long,
                     color: const Color(0xFF1565C0),
                     onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateInvoiceScreen())),
@@ -254,7 +352,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   _bigNavCard(
                     title: 'History',
-                    subtitle: 'Search & View',
+                    subtitle: 'Reprint Receipts',
                     icon: Icons.history,
                     color: Colors.teal,
                     onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const InvoiceHistoryScreen())),
@@ -401,6 +499,42 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showSavedDialog(Invoice inv) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.green),
+            SizedBox(width: 8),
+            Text('Invoice Saved!'),
+          ],
+        ),
+        content: Text('${inv.invNumber} generated for ${inv.customerName}.\nDo you want to send it to printer now?'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pop(context);
+            },
+            child: const Text('Close'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1565C0), foregroundColor: Colors.white),
+            icon: const Icon(Icons.share),
+            label: const Text('Print Receipt (Share)'),
+            onPressed: () {
+              Share.share(inv.toThermalReceiptText(appStore.shopSettings));
+              Navigator.pop(ctx);
+              Navigator.pop(context);
+            },
+          ),
+        ],
       ),
     );
   }
@@ -615,12 +749,9 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
                       paymentMethod: paymentMode,
                     );
                     appStore.saveInvoice(inv);
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('${inv.invNumber} saved successfully!'), backgroundColor: Colors.green),
-                    );
+                    _showSavedDialog(inv);
                   },
-            child: const Text('Save & Generate Invoice', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            child: const Text('Save & Print Invoice', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -691,7 +822,7 @@ class CustomerLedgerScreen extends StatelessWidget {
   }
 }
 
-// ---------------- 4. INVOICE HISTORY SCREEN ----------------
+// ---------------- 4. INVOICE HISTORY & REPRINT ----------------
 class InvoiceHistoryScreen extends StatelessWidget {
   const InvoiceHistoryScreen({super.key});
 
@@ -717,9 +848,12 @@ class InvoiceHistoryScreen extends StatelessWidget {
                   child: ListTile(
                     title: Text('${inv.invNumber} — ${inv.customerName}', style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text('${inv.date} | Total: Rs. ${inv.grand.toStringAsFixed(0)}'),
-                    trailing: Text(
-                      inv.remaining > 0 ? 'Due Rs. ${inv.remaining.toStringAsFixed(0)}' : 'Paid',
-                      style: TextStyle(color: inv.remaining > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.share, color: Colors.teal),
+                      tooltip: 'Share / Print RawBT',
+                      onPressed: () {
+                        Share.share(inv.toThermalReceiptText(appStore.shopSettings));
+                      },
                     ),
                   ),
                 );
@@ -829,3 +963,121 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
     );
   }
 }
+
+// ---------------- 6. WORKSHOP SETTINGS SCREEN ----------------
+class SettingsScreen extends StatefulWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  late TextEditingController _nameCtrl;
+  late TextEditingController _taglineCtrl;
+  late TextEditingController _phoneCtrl;
+  late TextEditingController _addressCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = appStore.shopSettings;
+    _nameCtrl = TextEditingController(text: s.name);
+    _taglineCtrl = TextEditingController(text: s.tagline);
+    _phoneCtrl = TextEditingController(text: s.phone);
+    _addressCtrl = TextEditingController(text: s.address);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Workshop / Receipt Settings'),
+        backgroundColor: const Color(0xFF1565C0),
+        foregroundColor: Colors.white,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            color: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Receipt Header Details', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  Text('Ye details har 80mm thermal receipt ke top par print hongi.', style: TextStyle(color: Colors.grey.shade600, fontSize: 13)),
+                  const Divider(height: 24),
+                  TextField(
+                    controller: _nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Workshop / Shop Name',
+                      prefixIcon: Icon(Icons.store),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _taglineCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Sub-heading / Tagline',
+                      prefixIcon: Icon(Icons.subtitles),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _phoneCtrl,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Contact Phone Number',
+                      prefixIcon: Icon(Icons.phone),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _addressCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Workshop Address / Market',
+                      prefixIcon: Icon(Icons.location_on),
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1565C0),
+              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(50),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            icon: const Icon(Icons.save),
+            label: const Text('Save Settings', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            onPressed: () {
+              appStore.updateShopSettings(
+                name: _nameCtrl.text.trim().isEmpty ? 'POP WORKSHOP' : _nameCtrl.text.trim(),
+                tagline: _taglineCtrl.text.trim(),
+                phone: _phoneCtrl.text.trim(),
+                address: _addressCtrl.text.trim(),
+              );
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Shop settings updated!'), backgroundColor: Colors.green),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+                            
