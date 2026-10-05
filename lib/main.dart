@@ -399,7 +399,12 @@ class WorkshopStore extends ChangeNotifier {
           body: jsonEncode(payload),
         );
 
-        if (resp.statusCode == 200) {
+        final loc = resp.headers['location'] ?? '';
+        final ok = resp.statusCode == 200 ||
+            ((resp.statusCode == 302 || resp.statusCode == 303) &&
+                loc.contains('googleusercontent.com'));
+
+        if (ok) {
           inv.synced = true;
           count++;
         }
@@ -1086,7 +1091,7 @@ class InvoiceHistoryScreen extends StatelessWidget {
                       inv.synced ? Icons.cloud_done : Icons.cloud_off,
                       color: inv.synced ? Colors.blue : Colors.grey,
                     ),
-                    title: Text('${inv.invNumber} — ${inv.customerName}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    title: Text('${inv.invNumber} â€” ${inv.customerName}', style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text('${inv.date} | Total: Rs. ${inv.grand.toStringAsFixed(0)}'),
                     trailing: IconButton(
                       icon: const Icon(Icons.share, color: Colors.teal),
@@ -1112,12 +1117,12 @@ class ProductCatalogScreen extends StatefulWidget {
 }
 
 class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
-  final emojis = ['🧱', '⬜', '✨', '📦', '📏', '🕸️', '🌸', '🔨', '⭐', '🛠️', '🪚'];
+  final emojis = ['ðŸ§±', 'â¬œ', 'âœ¨', 'ðŸ“¦', 'ðŸ“', 'ðŸ•¸ï¸', 'ðŸŒ¸', 'ðŸ”¨', 'â­', 'ðŸ› ï¸', 'ðŸªš'];
 
   void _showProductDialog({Product? existing}) {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final priceCtrl = TextEditingController(text: existing != null ? existing.price.toStringAsFixed(0) : '');
-    String selectedIcon = existing?.icon ?? '🧱';
+    String selectedIcon = existing?.icon ?? 'ðŸ§±';
     String selectedCategory = existing?.category ?? 'Tiles';
 
     showDialog(
