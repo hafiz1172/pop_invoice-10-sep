@@ -27,6 +27,9 @@ jobs:
       - name: Create Android Scaffolding
         run: flutter create . --platforms=android --project-name=pop_invoice
 
+      - name: Add Internet Permission
+        run: sed -i 's#<application#<uses-permission android:name="android.permission.INTERNET"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+
       - name: Get Dependencies
         run: flutter pub get
 
