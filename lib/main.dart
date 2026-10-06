@@ -252,6 +252,7 @@ class WorkshopStore extends ChangeNotifier {
   List<Invoice> invoices = [];
   Map<String, Customer> customers = {};
   bool isSyncing = false;
+  String lastSyncDebug = '';
 
   SharedPreferences? _prefs;
 
@@ -367,7 +368,8 @@ class WorkshopStore extends ChangeNotifier {
     notifyListeners();
 
     int count = 0;
-    final url = Uri.parse(shopSettings.syncUrl);
+    lastSyncDebug = '';
+    final url = Uri.parse(shopSettings.syncUrl.trim());
 
     for (var inv in invoices.where((i) => !i.synced)) {
       try {
@@ -407,9 +409,12 @@ class WorkshopStore extends ChangeNotifier {
         if (ok) {
           inv.synced = true;
           count++;
+        } else {
+          final body = resp.body.length > 120 ? resp.body.substring(0, 120) : resp.body;
+          lastSyncDebug = 'Status ${resp.statusCode}\nLocation: $loc\n$body';
         }
-      } catch (_) {
-        // Network offline or endpoint error; remains synced = false
+      } catch (e) {
+        lastSyncDebug = 'Error: $e';
       }
     }
 
@@ -514,7 +519,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text(count > 0 ? '$count bills synced successfully!' : 'No new bills to sync or offline.'),
+                            duration: Duration(seconds: count > 0 ? 3 : 20),
+                            content: Text(count > 0
+                                ? '$count bills synced successfully!'
+                                : (appStore.lastSyncDebug.isNotEmpty
+                                    ? appStore.lastSyncDebug
+                                    : 'No new bills to sync.')),
                             backgroundColor: count > 0 ? Colors.green : Colors.grey.shade800,
                           ),
                         );
@@ -1091,7 +1101,7 @@ class InvoiceHistoryScreen extends StatelessWidget {
                       inv.synced ? Icons.cloud_done : Icons.cloud_off,
                       color: inv.synced ? Colors.blue : Colors.grey,
                     ),
-                    title: Text('${inv.invNumber} â€” ${inv.customerName}', style: const TextStyle(fontWeight: FontWeight.bold)),
+                    title: Text('${inv.invNumber} — ${inv.customerName}', style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text('${inv.date} | Total: Rs. ${inv.grand.toStringAsFixed(0)}'),
                     trailing: IconButton(
                       icon: const Icon(Icons.share, color: Colors.teal),
@@ -1117,12 +1127,12 @@ class ProductCatalogScreen extends StatefulWidget {
 }
 
 class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
-  final emojis = ['ðŸ§±', 'â¬œ', 'âœ¨', 'ðŸ“¦', 'ðŸ“', 'ðŸ•¸ï¸', 'ðŸŒ¸', 'ðŸ”¨', 'â­', 'ðŸ› ï¸', 'ðŸªš'];
+  final emojis = ['🧱', '⬜', '✨', '📦', '📏', '🕸️', '🌸', '🔨', '⭐', '🛠️', '🪚'];
 
   void _showProductDialog({Product? existing}) {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final priceCtrl = TextEditingController(text: existing != null ? existing.price.toStringAsFixed(0) : '');
-    String selectedIcon = existing?.icon ?? 'ðŸ§±';
+    String selectedIcon = existing?.icon ?? '🧱';
     String selectedCategory = existing?.category ?? 'Tiles';
 
     showDialog(
