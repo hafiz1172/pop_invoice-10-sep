@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +18,7 @@ class Product {
   String icon;
   String category;
   double price;
+  String? image; // base64 picture (optional)
 
   Product({
     required this.id,
@@ -24,9 +26,20 @@ class Product {
     required this.icon,
     required this.category,
     required this.price,
+    this.image,
   });
 
   Map<String, dynamic> toMap() => {
+        'id': id,
+        'name': name,
+        'icon': icon,
+        'category': category,
+        'price': price,
+        'image': image,
+      };
+
+  // Without picture (used inside invoices to keep storage small)
+  Map<String, dynamic> toLightMap() => {
         'id': id,
         'name': name,
         'icon': icon,
@@ -40,7 +53,40 @@ class Product {
         icon: map['icon'],
         category: map['category'],
         price: (map['price'] as num).toDouble(),
+        image: map['image'] as String?,
       );
+}
+
+// Shows product picture if available, otherwise the emoji icon
+class ProductThumb extends StatelessWidget {
+  final Product product;
+  final double size;
+  const ProductThumb({super.key, required this.product, this.size = 40});
+
+  @override
+  Widget build(BuildContext context) {
+    final img = product.image;
+    if (img != null && img.isNotEmpty) {
+      try {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.memory(
+            base64Decode(img),
+            width: size,
+            height: size,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => Icon(Icons.image_not_supported, size: size * 0.7),
+          ),
+        );
+      } catch (_) {}
+    }
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Center(child: Text(product.icon, style: TextStyle(fontSize: size * 0.7))),
+    );
+  }
 }
 
 class InvoiceItem {
@@ -57,7 +103,7 @@ class InvoiceItem {
   double get total => qty * rate;
 
   Map<String, dynamic> toMap() => {
-        'product': product.toMap(),
+        'product': product.toLightMap(),
         'qty': qty,
         'rate': rate,
       };
@@ -315,25 +361,27 @@ class WorkshopStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addProduct(String name, String icon, String category, double price) {
+  void addProduct(String name, String icon, String category, double price, {String? image}) {
     products.add(Product(
       id: DateTime.now().millisecondsSinceEpoch,
       name: name,
       icon: icon,
       category: category,
       price: price,
+      image: image,
     ));
     _saveProducts();
     notifyListeners();
   }
 
-  void editProduct(int id, String newName, String newIcon, String newCategory, double newPrice) {
+  void editProduct(int id, String newName, String newIcon, String newCategory, double newPrice, {String? image}) {
     final idx = products.indexWhere((p) => p.id == id);
     if (idx != -1) {
       products[idx].name = newName;
       products[idx].icon = newIcon;
       products[idx].category = newCategory;
       products[idx].price = newPrice;
+      products[idx].image = image;
       _saveProducts();
       notifyListeners();
     }
@@ -733,7 +781,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text(p.icon, style: const TextStyle(fontSize: 32)),
+                          ProductThumb(product: p, size: 52),
                           const SizedBox(height: 4),
                           Text(p.name, textAlign: TextAlign.center, maxLines: 1, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                           Text('Rs. ${p.price.toStringAsFixed(0)}', style: const TextStyle(color: Colors.black54, fontSize: 12)),
@@ -881,7 +929,7 @@ class _CreateInvoiceScreenState extends State<CreateInvoiceScreen> {
                 padding: const EdgeInsets.all(8.0),
                 child: Row(
                   children: [
-                    Text(item.product.icon, style: const TextStyle(fontSize: 24)),
+                    ProductThumb(product: item.product, size: 40),
                     const SizedBox(width: 8),
                     Expanded(
                       flex: 3,
@@ -1133,6 +1181,7 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final priceCtrl = TextEditingController(text: existing != null ? existing.price.toStringAsFixed(0) : '');
     String selectedIcon = existing?.icon ?? '🧱';
+    String? selectedImage = existing?.image;
     String selectedCategory = existing?.category ?? 'Tiles';
 
     showDialog(
@@ -1147,7 +1196,58 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                 TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Item Name (e.g. 2x2 Plain)')),
                 TextField(controller: priceCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Rate (Rs)')),
                 const SizedBox(height: 12),
-                const Text('Pick Icon:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text('Picture:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    ProductThumb(
+                      product: Product(id: 0, name: '', icon: selectedIcon, category: '', price: 0, image: selectedImage),
+                      size: 70,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Wrap(
+                        spacing: 6,
+                        children: [
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.photo_library),
+                            label: const Text('Gallery'),
+                            onPressed: () async {
+                              try {
+                                final f = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 300, maxHeight: 300, imageQuality: 60);
+                                if (f != null) {
+                                  final bytes = await f.readAsBytes();
+                                  setDState(() => selectedImage = base64Encode(bytes));
+                                }
+                              } catch (_) {}
+                            },
+                          ),
+                          OutlinedButton.icon(
+                            icon: const Icon(Icons.photo_camera),
+                            label: const Text('Camera'),
+                            onPressed: () async {
+                              try {
+                                final f = await ImagePicker().pickImage(source: ImageSource.camera, maxWidth: 300, maxHeight: 300, imageQuality: 60);
+                                if (f != null) {
+                                  final bytes = await f.readAsBytes();
+                                  setDState(() => selectedImage = base64Encode(bytes));
+                                }
+                              } catch (_) {}
+                            },
+                          ),
+                          if (selectedImage != null)
+                            TextButton.icon(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              label: const Text('Remove', style: TextStyle(color: Colors.red)),
+                              onPressed: () => setDState(() => selectedImage = null),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Text('Or pick Icon:', style: TextStyle(fontWeight: FontWeight.bold)),
                 Wrap(
                   spacing: 6,
                   children: emojis
@@ -1168,9 +1268,9 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                 if (nameCtrl.text.isNotEmpty) {
                   final price = double.tryParse(priceCtrl.text) ?? 0.0;
                   if (existing == null) {
-                    appStore.addProduct(nameCtrl.text, selectedIcon, selectedCategory, price);
+                    appStore.addProduct(nameCtrl.text, selectedIcon, selectedCategory, price, image: selectedImage);
                   } else {
-                    appStore.editProduct(existing.id, nameCtrl.text, selectedIcon, selectedCategory, price);
+                    appStore.editProduct(existing.id, nameCtrl.text, selectedIcon, selectedCategory, price, image: selectedImage);
                   }
                   Navigator.pop(ctx);
                   setState(() {});
@@ -1214,7 +1314,7 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                 return Card(
                   color: Colors.white,
                   child: ListTile(
-                    leading: Text(p.icon, style: const TextStyle(fontSize: 26)),
+                    leading: ProductThumb(product: p, size: 46),
                     title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
                     subtitle: Text('Rate: Rs. ${p.price.toStringAsFixed(0)}'),
                     trailing: Row(
